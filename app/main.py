@@ -8,6 +8,8 @@ import socketio
 import logging
 import json
 import pathlib
+import subprocess
+
 
 from ytdl import DownloadQueueNotifier, DownloadQueue
 
@@ -193,6 +195,43 @@ async def connect(sid, environ):
     await sio.emit('configuration', serializer.encode(config), to=sid)
     if config.CUSTOM_DIRS:
         await sio.emit('custom_dirs', serializer.encode(get_custom_dirs()), to=sid)
+
+async def check_and_download_subtitles(video_url, preferred_languages):
+    """
+    Check for available subtitles and download the preferred ones.
+    """
+    # Command to get the list of subtitles using yt-dlp
+    cmd_list_subs = [
+        yt_dlp_path, "--list-subs", "--skip-download", video_url
+    ]
+
+    # Run the command to list subtitles
+    result = subprocess.run(cmd_list_subs, capture_output=True, text=True)
+    if result.returncode != 0:
+        log.error(f"yt-dlp failed to list subtitles: {result.stderr}")
+        raise Exception("Failed to list subtitles.")
+
+    # Parse the output to find available subtitles
+    available_subs = result.stdout.splitlines()
+    log.info(f"Available subtitles: {available_subs}")
+
+    # Find the best match for preferred languages
+    for language in preferred_languages:
+        if any(language in sub for sub in available_subs):
+            # Found the preferred subtitle language, download it
+            cmd_download_sub = [
+                yt_dlp_path, "--write-sub", "--sub-lang", language, "--skip-download", video_url
+            ]
+            result_download = subprocess.run(cmd_download_sub, capture_output=True, text=True)
+            if result_download.returncode != 0:
+                log.error(f"yt-dlp failed to download subtitles: {result_download.stderr}")
+                raise Exception("Failed to download subtitles.")
+
+            log.info(f"Downloaded subtitles for language: {language}")
+            return {"status": "success", "language": language, "message": "Subtitle downloaded."}
+
+    log.info("No preferred subtitles found. No subtitles downloaded.")
+    return {"status": "no_subtitles", "message": "No preferred subtitles found."}
 
 def get_custom_dirs():
     def recursive_dirs(base):
