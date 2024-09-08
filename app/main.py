@@ -177,7 +177,6 @@ async def check_subtitles(request):
         raise web.HTTPInternalServerError(reason="Failed to check and download subtitles.")
 
 
-
 @routes.get(config.URL_PREFIX + 'history')
 async def history(request):
     history = { 'done': [], 'queue': []}
@@ -196,42 +195,51 @@ async def connect(sid, environ):
     if config.CUSTOM_DIRS:
         await sio.emit('custom_dirs', serializer.encode(get_custom_dirs()), to=sid)
 
-async def check_and_download_subtitles(video_url, preferred_languages):
+async def check_and_download_subtitles(video_url, preferred_languages=None):
     """
-    Check for available subtitles and download the preferred ones.
+    Check for available subtitles and download the preferred ones using yt_dlp.
     """
-    # Command to get the list of subtitles using yt-dlp
-    cmd_list_subs = [
-        yt_dlp_path, "--list-subs", "--skip-download", video_url
-    ]
+    # Define preferred languages with priority: Traditional Chinese, Simplified Chinese, Japanese, English
+    if preferred_languages is None:
+        preferred_languages = ['zh-Hant', 'zh-Hans', 'ja', 'en']
+    
+    ydl_opts = {
+        'quiet': True,
+        'skip_download': True,
+        'writesubtitles': True,
+        'listsubtitles': True,
+        'no_color': True,
+    }
 
-    # Run the command to list subtitles
-    result = subprocess.run(cmd_list_subs, capture_output=True, text=True)
-    if result.returncode != 0:
-        log.error(f"yt-dlp failed to list subtitles: {result.stderr}")
-        raise Exception("Failed to list subtitles.")
+    try:
+        # Use yt_dlp to list subtitles
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            available_subs = info.get('subtitles', {})
+        
+        log.info(f"Available subtitles: {available_subs.keys()}")
 
-    # Parse the output to find available subtitles
-    available_subs = result.stdout.splitlines()
-    log.info(f"Available subtitles: {available_subs}")
+        # Find the best match for preferred languages
+        for language in preferred_languages:
+            if language in available_subs:
+                # Found the preferred subtitle language, download it
+                ydl_opts['writesubtitles'] = True
+                ydl_opts['subtitleslangs'] = [language]
+                ydl_opts['skip_download'] = True
 
-    # Find the best match for preferred languages
-    for language in preferred_languages:
-        if any(language in sub for sub in available_subs):
-            # Found the preferred subtitle language, download it
-            cmd_download_sub = [
-                yt_dlp_path, "--write-sub", "--sub-lang", language, "--skip-download", video_url
-            ]
-            result_download = subprocess.run(cmd_download_sub, capture_output=True, text=True)
-            if result_download.returncode != 0:
-                log.error(f"yt-dlp failed to download subtitles: {result_download.stderr}")
-                raise Exception("Failed to download subtitles.")
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([video_url])
 
-            log.info(f"Downloaded subtitles for language: {language}")
-            return {"status": "success", "language": language, "message": "Subtitle downloaded."}
+                log.info(f"Downloaded subtitles for language: {language}")
+                return {"status": "success", "language": language, "message": "Subtitle downloaded."}
 
-    log.info("No preferred subtitles found. No subtitles downloaded.")
-    return {"status": "no_subtitles", "message": "No preferred subtitles found."}
+        log.info("No preferred subtitles found. No subtitles downloaded.")
+        return {"status": "no_subtitles", "message": "No preferred subtitles found."}
+
+    except yt_dlp.utils.YoutubeDLError as e:
+        log.error(f"yt-dlp error: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
 
 def get_custom_dirs():
     def recursive_dirs(base):
