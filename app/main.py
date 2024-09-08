@@ -157,6 +157,25 @@ async def start(request):
     status = await dqueue.start_pending(ids)
     return web.Response(text=serializer.encode(status))
 
+@routes.post(config.URL_PREFIX + 'check_subtitles')
+async def check_subtitles(request):
+    post = await request.json()
+    url = post.get('url')
+    preferred_languages = post.get('languages', ['zh-Hans', 'zh-Hant', 'en'])
+
+    if not url:
+        raise web.HTTPBadRequest(reason="Missing 'url' in request.")
+
+    try:
+        # Call the function to check and download subtitles
+        subtitles_info = await check_and_download_subtitles(url, preferred_languages)
+        return web.Response(text=serializer.encode(subtitles_info))
+    except Exception as e:
+        log.error(f"Error checking subtitles: {str(e)}")
+        raise web.HTTPInternalServerError(reason="Failed to check and download subtitles.")
+
+
+
 @routes.get(config.URL_PREFIX + 'history')
 async def history(request):
     history = { 'done': [], 'queue': []}
